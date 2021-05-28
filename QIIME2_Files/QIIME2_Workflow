@@ -1,0 +1,121 @@
+27 Jan 2021
+Author: ingala.melissar@gmail.com
+
+######### MELISSA'S QIIME2 PIPELINE
+###### ITASCA 2018 BIRD MICROBIOMES
+## QIIME2 VER. 2020.8
+
+########### SEQ METADATA #########
+### 2 X 250 BP PE READS
+## DEMUX'D SAMPLES WHERE EACH SAMPLE F AND R IS IN OWN DIRECTORY. IMPORTING AS MANIFEST
+
+source activate qiime2-2020.8
+ 
+### Import as manifest
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path Itasca_Manifest.txt \
+  --output-path Itasca-paired-end-demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+### Quality control
+qiime demux summarize \
+  --i-data Itasca-paired-end-demux.qza \
+  --o-visualization Itasca-demux-summary.qzv
+#overall scores high, will trim first 15 bases off each and trunc to 220 bp. This is somewhat arbitrary but see demux visualization
+
+### DADA2 to join reads and filter out chimeras
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs Itasca-paired-end-demux.qza \
+  --p-trim-left-f 15 \
+  --p-trim-left-r 15 \
+  --p-trunc-len-f 220 \
+  --p-trunc-len-r 220 \
+  --o-table Itasca-table-dada2.qza \
+  --o-representative-sequences Itasca-rep-seqs.qza \
+  --o-denoising-stats Itasca-denoising-stats.qza
+
+qiime metadata tabulate \
+  --m-input-file Itasca-denoising-stats-dada2.qza \
+  --o-visualization Itasca-stats-dada2.qzv
+
+#submitted as PBS script: 430085.amnh-gen-001
+
+qiime feature-table summarize \
+  --i-table Itasca-table-dada2.qza  \
+  --o-visualization Itasca-table-dada2.qza \
+  --m-sample-metadata-file Itasca_Metadata.txt 
+
+############################# Generate Phylogenetic Tree ##############################
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences Itasca-rep-seqs-dada2.qza \
+  --o-alignment Itasca-aligned-rep-seqs.qza \
+  --o-masked-alignment Itasca-masked-aligned-rep-seqs.qza \
+  --o-tree Itasca-unrooted-tree.qza \
+  --o-rooted-tree Itasca-rooted-tree.qza
+
+############################ Core Diversity Metrics #####################################
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny Itasca-rooted-tree.qza \
+  --i-table Itasca-table-dada2.qza \
+  --p-sampling-depth 1000 \
+  --m-metadata-file Itasca_Metadata.txt \
+  --output-dir core-metrics-results
+
+########################## Alpha Rarefaction Plot ###################################
+qiime diversity alpha-rarefaction \
+  --i-table Itasca-table-dada2.qza \
+  --i-phylogeny Itasca-rooted-tree.qza \
+  --p-max-depth 1000 \
+  --m-metadata-file Itasca_Metadata.txt \
+  --o-visualization alpha-rarefaction.qzv
+
+############################ Taxonomic Assignment & Summary #############################
+
+#Downloaded pre-trained 16S 515F-806R GG_99 classifier
+wget https://data.qiime2.org/2020.11/common/gg-13-8-99-515-806-nb-classifier.qza
+
+####WARNING:These classifiers were trained using scikit-learn 0.20.2, and therefore can only be used with scikit-learn 0.20.2
+conda install --override-channels -c defaults scikit-learn=0.21.2
+
+
+###WARNING: This is a big ref file, so if you're running this over a shared cluster with user-limited storage,
+# 	you may need to export your TMPDIR environmental variable to a place with more storage. Otherwise,
+#	the command may fail due to memory limits. Note that trying to get around this by runnning over network attached storage 
+# may produce a race condition error. 
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier gg-13-8-99-515-806-nb-classifier.qza\
+  --i-reads Itasca-rep-seqs-dada2.qza \
+  --o-classification Itasca-GG-16S-taxonomy.qza
+
+qiime taxa barplot \
+--i-table Itasca-table-dada2.qza \
+--i-taxonomy Itasca-GG-16S-taxonomy.qza  \
+--m-metadata-file Itasca_Metadata.txt \
+--o-visualization Itasca-16S_taxonomic_barplot.qzv
+
+##################### FILTERING ALL DATA FOR MITOCHONDRIA AND CHLOROPLASTS ##################
+qiime taxa filter-table \
+  --i-table Itasca-table-dada2.qza \
+  --i-taxonomy Itasca-GG-16S-taxonomy.qza \
+  --p-include "p__" \
+  --p-exclude "mitochondria","chloroplast" \
+  --o-filtered-table Itasca-table-no-mito-chloro.qza
+  
+qiime taxa barplot \
+--i-table Itasca-table-no-mito-chloro.qza \
+--i-taxonomy Itasca-GG-16S-taxonomy.qza  \
+--m-metadata-file Itasca_Metadata.txt \
+--o-visualization Itasca-16S_filtered_barplot.qzv
+
+#################### EXPORT ANNOTATED FEATURE TABLE TO BIOM ################
+qiime tools export --input-path Itasca-table-no-mito-chloro.qza --output-path exported/
+qiime tools export --input-path  Itasca-GG-16S-taxonomy.qza --output-path exported/
+cp exported/taxonomy.tsv exported/biom-taxonomy.tsv
+biom add-metadata -i exported/feature-table.biom -o table-with-taxonomy.biom --observation-metadata-fp biom-taxonomy.tsv --sc-separated taxonomy
+qiime tools export \
+  --input-path Itasca-unrooted-tree.qza \
+  --output-path exported/exported-tree
+  
+################## All further analyses computed in R ####################
