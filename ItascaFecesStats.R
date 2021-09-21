@@ -377,3 +377,78 @@ dev.off()
 pdf(file = "NMDS_Nests.pdf", width = 12, height = 6)
 plot_grid(x = EABL.NMDS, TRES.NMDS,nrow = 1)
 dev.off()
+                                 
+##############Read in temperature data##############
+library(tidyverse)
+library(cowplot)
+exp_temp <- read.csv('Itasca2018_ibuttondata_5June20.csv', header = T, row.names = 1) 
+
+exp_temp_full <- exp_temp %>%
+  tidyr::separate('Date',
+                  into = c('month', 'day', 'year'),
+                  sep= '/',
+                  remove = FALSE)
+
+tempgraph <- ggplot(data=exp_temp_full, 
+                     aes(x=as.Date(Date, format = "%m / %d / %Y"), 
+                         y=AverageNestTemp, colour=HeatTreatment)) +
+  geom_point(size=1, alpha = 1/10)+ theme_bw()+
+  facet_grid(fct_relevel(HeatTreatment, "NH", "H")~NestID)+ 
+  theme(axis.text.x = element_text(angle=45, margin = margin(t=20, r=100)))+
+  labs(title="Raw temperature data", y="Temperature (°C)", x="Date")
+tempgraph
+
+#calculate means
+fullmean <- exp_temp_full %>%
+  group_by(year, month, day, HeatTreatment, Date)%>%
+  summarise(meantemp = mean(Temperature))
+
+head(fullmean)
+
+library(dplyr)
+fullmean %>%
+  group_by(as.factor(HeatTreatment)) %>%
+  summarise(meantemp = mean(meantemp))
+
+# H 31.1
+# NH 26.0
+fullmean %>%
+  group_by(as.factor(HeatTreatment)) %>%
+  summarise(variance = sd(meantemp))
+
+# H 5.47
+#NH 3.66
+
+#figure: daily temp means
+fullmean$month <- factor(fullmean$month, levels=c("05", "06", "07", "08"))
+meanplot <- ggplot(fullmean, aes(x=as.Date(Date, format= "%m / %d / %Y"), y=meantemp))+
+  geom_smooth(aes(colour=HeatTreatment))+
+  theme_bw()+
+  labs(title= "Daily temperature means", y="Daily mean temperature (°C) with 95% CI", x="Date")
+meanplot
+
+#signif test 
+mean_temp_exp_aov <- aov(meantemp~HeatTreatment + as.factor(month), data=fullmean)
+summary(mean_temp_exp_aov)
+#                   Df Sum Sq Mean Sq F value   Pr(>F)    
+#HeatTreatment      1  825.2   825.2   62.05 1.35e-12 ***
+#  as.factor(month) 3 1256.7   418.9   31.50 2.92e-15 ***
+#  Residuals        126 1675.8    13.3
+
+######### Temperature range
+fullrange <- exp_temp_full %>%
+  group_by(year, month, day, HeatTreatment, Date)%>%
+  summarise(min_temp = min(Temperature), max_temp = max(Temperature))%>%
+  mutate(range = max_temp-min_temp)
+
+head(fullrange, digits=5)
+
+rangeplotfull <- ggplot(data=fullrange, 
+                       aes(x=as.Date(Date, format = "%m / %d / %Y"), 
+                           y=range, colour=HeatTreatment)) +
+  geom_smooth()+ theme_bw()+
+  theme(axis.text.x = element_text(margin = margin(t=5)))+
+  labs(title="Daily temperature range", y="Mean daily temperature range (°C) with 95% CI ", x="Date")
+
+rangeplotfull
+
